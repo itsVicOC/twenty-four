@@ -78,6 +78,14 @@ export const startDailyRun = async () => {
   return data as RunState;
 };
 
+export const restartDailyRun = async () => {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await supabase.rpc("restart_daily_run");
+  if (error) throw error;
+  return data as RunState;
+};
+
 export const resumeDailyRun = async () => {
   if (!supabase) throw new Error("Supabase is not configured");
 

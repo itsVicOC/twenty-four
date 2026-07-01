@@ -1,11 +1,12 @@
 begin;
 
-select plan(7);
+select plan(8);
 
 select has_table('public', 'profiles');
 select has_table('public', 'runs');
 select has_table('public', 'run_solutions');
 select has_function('public', 'start_daily_run');
+select has_function('public', 'restart_daily_run');
 select has_function('public', 'submit_solution');
 
 select is(

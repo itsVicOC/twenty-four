@@ -27,12 +27,13 @@ npm run dev
 ## Supabase 设置
 
 1. 新建 Supabase 项目并启用 Auth 的 Anonymous sign-ins。
-2. 在 SQL Editor 运行 `supabase/migrations/0001_competitive_twenty_four.sql`。
+2. 在 SQL Editor 按文件名顺序运行 `supabase/migrations/` 下的 SQL。
 3. 前端只需要 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。
 
 正式赛公平性由数据库提供：
 
 - `start_daily_run` 使用 Asia/Shanghai 日期创建每日固定题组。
+- `restart_daily_run` 可清空本人今日正式赛进度并重新计时。
 - `submit_solution` 只接受 3 步运算轨迹，并用有理数精确验算。
 - `runs.started_at`、`completed_at` 和 `score_ms` 都由数据库时间生成。
 - 今日榜只展示已完成成绩，历史榜按每日名次积分累计。

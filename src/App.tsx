@@ -56,6 +56,7 @@ import {
   getTodayLeaderboard,
   isSupabaseConfigured,
   resumeDailyRun,
+  restartDailyRun,
   saveProfile,
   startDailyRun,
   submitDailySolution,
@@ -109,6 +110,7 @@ function App() {
   const [notice, setNotice] = useState("");
   const [nowMs, setNowMs] = useState(Date.now());
   const [finishOpen, setFinishOpen] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
   const [bootNickname] = useState(nickname);
 
   const dailySolvedCount = run?.puzzles.filter((puzzle) => puzzle.solved).length ?? 0;
@@ -147,12 +149,12 @@ function App() {
     setHistoryRows(history);
   }, []);
 
-  const resetBoard = useCallback((numbers: readonly number[]) => {
+  const resetBoard = useCallback((numbers: readonly number[], clearNotice = false) => {
     setTiles(createInitialTiles(numbers));
     setSteps([]);
     setSelectedTileId(null);
     setPendingOp(null);
-    setNotice("");
+    if (clearNotice) setNotice("");
   }, []);
 
   useEffect(() => {
@@ -228,10 +230,18 @@ function App() {
     }
   };
 
-  const handleStartDaily = async () => {
+  const handleDailyMode = async () => {
     if (!isSupabaseConfigured) {
       setMode("practice");
       setNotice("连接 Supabase 后即可参加今日正式赛。");
+      return;
+    }
+
+    if (run) {
+      setMode("daily");
+      setActivePuzzleIndex(findFirstUnsolvedIndex(run));
+      setFinishOpen(Boolean(run.completed_at));
+      setNotice(run.completed_at ? "今日成绩已完成。" : "已切回今日正式赛。");
       return;
     }
 
@@ -246,6 +256,34 @@ function App() {
       setFinishOpen(Boolean(nextRun.completed_at));
       await refreshLeaderboards();
       setNotice(nextRun.completed_at ? "今日成绩已完成。" : "今日正式赛已开始。");
+    } catch (error) {
+      setRestartOpen(false);
+      setNotice(normalizeSupabaseError(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleRestartDaily = async () => {
+    if (!isSupabaseConfigured) {
+      setRestartOpen(false);
+      setMode("practice");
+      setNotice("连接 Supabase 后即可参加今日正式赛。");
+      return;
+    }
+
+    try {
+      setIsBusy(true);
+      await ensureAnonymousUser();
+      await saveProfile(nickname.trim());
+      const nextRun = await restartDailyRun();
+      setRun(nextRun);
+      setMode("daily");
+      setActivePuzzleIndex(findFirstUnsolvedIndex(nextRun));
+      setFinishOpen(false);
+      setRestartOpen(false);
+      await refreshLeaderboards();
+      setNotice("正式赛已重新开始。");
     } catch (error) {
       setNotice(normalizeSupabaseError(error));
     } finally {
@@ -307,7 +345,7 @@ function App() {
 
   const handleReset = () => {
     if (!activePuzzle) return;
-    resetBoard(activePuzzle.numbers);
+    resetBoard(activePuzzle.numbers, true);
   };
 
   const handleSubmit = async () => {
@@ -430,13 +468,30 @@ function App() {
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      onClick={handleStartDaily}
+                      onClick={handleDailyMode}
                       disabled={isBusy}
                       className="min-w-32"
                     >
-                      {isBusy ? <RefreshCw className="animate-spin" /> : <Play />}
-                      正式赛
+                      {isBusy ? (
+                        <RefreshCw className="animate-spin" />
+                      ) : run ? (
+                        <Medal />
+                      ) : (
+                        <Play />
+                      )}
+                      {run ? (mode === "daily" ? "正式赛" : "回正式赛") : "开始正式赛"}
                     </Button>
+                    {mode === "daily" && run ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setRestartOpen(true)}
+                        disabled={isBusy}
+                      >
+                        <RotateCcw />
+                        重开
+                      </Button>
+                    ) : null}
                     <Button
                       type="button"
                       variant="outline"
@@ -673,6 +728,31 @@ function App() {
             </Button>
             <Button type="button" onClick={() => setFinishOpen(false)}>
               查看榜单
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={restartOpen} onOpenChange={setRestartOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重新开始正式赛？</DialogTitle>
+            <DialogDescription>
+              今日正式赛的已提交题目和当前计时会被清空，重新从第 1 题开始。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRestartOpen(false)}
+              disabled={isBusy}
+            >
+              取消
+            </Button>
+            <Button type="button" onClick={handleRestartDaily} disabled={isBusy}>
+              {isBusy ? <RefreshCw className="animate-spin" /> : <RotateCcw />}
+              重新开始
             </Button>
           </DialogFooter>
         </DialogContent>
