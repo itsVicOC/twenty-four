@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
-  ChevronRight,
   Dumbbell,
   Medal,
   Play,
@@ -39,6 +38,7 @@ import { Separator } from "./components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { cn } from "./lib/utils";
 import {
+  applyStepToTiles,
   createInitialTiles,
   displayOperator,
   formatFraction,
@@ -92,6 +92,26 @@ const normalizeSupabaseError = (error: unknown) => {
   return "操作失败";
 };
 
+const describeSolutionSteps = (
+  numbers: readonly number[],
+  solutionSteps: readonly SolutionStep[],
+) => {
+  let currentTiles = createInitialTiles(numbers);
+
+  return solutionSteps.map((step) => {
+    const left = currentTiles.find((tile) => tile.id === step.left_id);
+    const right = currentTiles.find((tile) => tile.id === step.right_id);
+    currentTiles = applyStepToTiles(currentTiles, step);
+    const result = currentTiles.find((tile) => tile.id === step.result_id);
+
+    if (!left || !right || !result) return "无法显示该步骤";
+
+    return `${formatFraction(left)} ${displayOperator(step.operator_code)} ${formatFraction(
+      right,
+    )} = ${formatFraction(result)}`;
+  });
+};
+
 function App() {
   const [mode, setMode] = useState<GameMode>("daily");
   const [nickname, setNickname] = useState(defaultNickname);
@@ -112,6 +132,7 @@ function App() {
   const [finishOpen, setFinishOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [bootNickname] = useState(nickname);
+  const leaderboardRef = useRef<HTMLElement>(null);
 
   const dailySolvedCount = run?.puzzles.filter((puzzle) => puzzle.solved).length ?? 0;
   const totalDailyPuzzles = run?.puzzles.length ?? 10;
@@ -131,6 +152,23 @@ function App() {
   const selectedTile = selectedTileId
     ? tiles.find((tile) => tile.id === selectedTileId)
     : null;
+
+  const readableSteps = useMemo(
+    () => (activePuzzle ? describeSolutionSteps(activePuzzle.numbers, steps) : []),
+    [activePuzzle, steps],
+  );
+
+  const interactionPrompt = useMemo(() => {
+    if (activePuzzle?.solved) return "本题已完成。";
+    if (tiles.length === 1 && steps.length === 3) {
+      return canSubmit ? "结果是 24，可以提交。" : "结果不是 24，请撤销一步或重来。";
+    }
+    if (!selectedTile) return "先选择第一个数字。";
+    if (!pendingOp) return `已选择 ${formatFraction(selectedTile)}，现在选择运算符。`;
+    return `已选择 ${formatFraction(selectedTile)} ${displayOperator(
+      pendingOp,
+    )}，现在选择第二个数字。`;
+  }, [activePuzzle?.solved, canSubmit, pendingOp, selectedTile, steps.length, tiles.length]);
 
   const elapsedMs = useMemo(() => {
     if (!run?.started_at) return 0;
@@ -292,9 +330,26 @@ function App() {
   };
 
   const handlePractice = () => {
+    if (mode === "practice") {
+      setPracticeSeed((value) => value + 1);
+      setNotice("已换一题。");
+      return;
+    }
+
     setMode("practice");
-    setPracticeSeed((value) => value + 1);
-    setNotice("");
+    setNotice(
+      run && !run.completed_at
+        ? "已进入练习场，正式赛计时仍在继续。"
+        : "已进入练习场。",
+    );
+  };
+
+  const handleViewLeaderboard = () => {
+    setFinishOpen(false);
+    window.requestAnimationFrame(() => {
+      leaderboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      leaderboardRef.current?.focus({ preventScroll: true });
+    });
   };
 
   const handleSelectTile = (tile: Tile) => {
@@ -399,12 +454,14 @@ function App() {
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <Badge variant="secondary" className="gap-1">
                   <ShieldCheck className="h-3.5 w-3.5" />
-                  数据库裁判
+                  {isSupabaseConfigured ? "数据库裁判" : "本地练习"}
                 </Badge>
-                <Badge variant="outline" className="gap-1 bg-background">
-                  <Timer className="h-3.5 w-3.5" />
-                  {formatDuration(elapsedMs)}
-                </Badge>
+                {mode === "daily" && run ? (
+                  <Badge variant="outline" className="gap-1 bg-background">
+                    <Timer className="h-3.5 w-3.5" />
+                    {formatDuration(elapsedMs)}
+                  </Badge>
+                ) : null}
               </div>
             </div>
           </div>
@@ -439,12 +496,6 @@ function App() {
           </div>
         </header>
 
-        {notice ? (
-          <div className="rounded-md border bg-card/95 px-4 py-3 text-sm text-muted-foreground shadow-sm">
-            {notice}
-          </div>
-        ) : null}
-
         <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="flex min-w-0 flex-col gap-5">
             <Card className="overflow-hidden">
@@ -469,8 +520,11 @@ function App() {
                     <Button
                       type="button"
                       onClick={handleDailyMode}
-                      disabled={isBusy}
+                      disabled={isBusy || !isSupabaseConfigured}
                       className="min-w-32"
+                      title={
+                        isSupabaseConfigured ? undefined : "连接 Supabase 后可参加正式赛"
+                      }
                     >
                       {isBusy ? (
                         <RefreshCw className="animate-spin" />
@@ -479,7 +533,13 @@ function App() {
                       ) : (
                         <Play />
                       )}
-                      {run ? (mode === "daily" ? "正式赛" : "回正式赛") : "开始正式赛"}
+                      {isSupabaseConfigured
+                        ? run
+                          ? mode === "daily"
+                            ? "正式赛"
+                            : "回正式赛"
+                          : "开始正式赛"
+                        : "正式赛未连接"}
                     </Button>
                     {mode === "daily" && run ? (
                       <Button
@@ -498,12 +558,18 @@ function App() {
                       onClick={handlePractice}
                       disabled={isBusy}
                     >
-                      <Dumbbell />
-                      练习
+                      {mode === "practice" ? <RefreshCw /> : <Dumbbell />}
+                      {mode === "practice" ? "换一题" : "练习"}
                     </Button>
                   </div>
                 </div>
-                <Progress value={mode === "daily" ? dailyProgress : 100} />
+                {mode === "daily" ? (
+                  <Progress
+                    value={dailyProgress}
+                    aria-label="今日赛完成进度"
+                    aria-valuetext={`${dailySolvedCount}/${totalDailyPuzzles} 题`}
+                  />
+                ) : null}
               </CardHeader>
 
               <CardContent className="grid gap-5">
@@ -516,7 +582,7 @@ function App() {
                         variant={index === activePuzzleIndex ? "default" : "outline"}
                         size="sm"
                         className={cn(
-                          "h-9 px-0",
+                          "h-11 px-0",
                           puzzle.solved &&
                             index !== activePuzzleIndex &&
                             "border-primary/30 bg-primary/10 text-primary",
@@ -544,9 +610,11 @@ function App() {
                         type="button"
                         variant="outline"
                         size="icon"
+                        className="h-11 w-11"
                         onClick={handleUndo}
                         disabled={steps.length === 0 || activePuzzle?.solved}
                         title="撤销"
+                        aria-label="撤销上一步"
                       >
                         <Undo2 />
                       </Button>
@@ -554,9 +622,11 @@ function App() {
                         type="button"
                         variant="outline"
                         size="icon"
+                        className="h-11 w-11"
                         onClick={handleReset}
                         disabled={!activePuzzle || activePuzzle.solved}
                         title="重来"
+                        aria-label="重新计算本题"
                       >
                         <RotateCcw />
                       </Button>
@@ -564,12 +634,16 @@ function App() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {tiles.map((tile) => (
+                    {tiles.map((tile, tileIndex) => (
                       <button
                         key={tile.id}
                         type="button"
                         onClick={() => handleSelectTile(tile)}
                         disabled={activePuzzle?.solved}
+                        aria-label={`数字 ${formatFraction(tile)}，第 ${tileIndex + 1} 张，算式 ${
+                          tile.expr
+                        }`}
+                        aria-pressed={selectedTileId === tile.id}
                         className={cn(
                           "number-card flex aspect-[4/3] min-h-24 flex-col items-center justify-center rounded-lg border p-3 text-center shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
                           selectedTileId === tile.id
@@ -596,6 +670,7 @@ function App() {
                         className="h-12 text-xl"
                         disabled={!selectedTile || activePuzzle?.solved}
                         onClick={() => setPendingOp(op)}
+                        aria-pressed={pendingOp === op}
                       >
                         {displayOperator(op)}
                       </Button>
@@ -603,28 +678,33 @@ function App() {
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-                    <div className="min-h-16 rounded-md border bg-card p-3">
-                      {steps.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          {selectedTile
-                            ? `已选 ${formatFraction(selectedTile)}`
-                            : "选择两张数字牌和一个运算符"}
-                        </p>
-                      ) : (
+                    <div
+                      className="min-h-20 rounded-md border bg-card p-3"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      <p
+                        className={cn(
+                          "text-sm",
+                          notice ? "font-medium text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        {notice || interactionPrompt}
+                      </p>
+                      {notice ? (
+                        <p className="mt-1 text-xs text-muted-foreground">{interactionPrompt}</p>
+                      ) : null}
+                      {steps.length > 0 ? (
                         <ol className="grid gap-1 text-sm">
-                          {steps.map((step, index) => (
-                            <li key={step.result_id} className="flex items-center gap-2">
+                          {readableSteps.map((description, index) => (
+                            <li key={`${index}-${description}`} className="flex items-center gap-2">
                               <span className="text-muted-foreground">{index + 1}.</span>
-                              <span>
-                                {step.left_id} {displayOperator(step.operator_code)}{" "}
-                                {step.right_id}
-                              </span>
-                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                              <span className="font-medium">{step.result_id}</span>
+                              <span className="font-medium">{description}</span>
                             </li>
                           ))}
                         </ol>
-                      )}
+                      ) : null}
                     </div>
                     <Button
                       type="button"
@@ -642,10 +722,15 @@ function App() {
             </Card>
           </section>
 
-          <aside className="min-w-0">
+          <aside
+            ref={leaderboardRef}
+            tabIndex={-1}
+            aria-labelledby="leaderboard-heading"
+            className="min-w-0 scroll-mt-5 focus:outline-none"
+          >
             <Card className="sticky top-5">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle id="leaderboard-heading" className="flex items-center gap-2">
                   <Trophy className="h-5 w-5 text-primary" />
                   排行榜
                 </CardTitle>
@@ -726,7 +811,7 @@ function App() {
               <Dumbbell />
               去练习
             </Button>
-            <Button type="button" onClick={() => setFinishOpen(false)}>
+            <Button type="button" onClick={handleViewLeaderboard}>
               查看榜单
             </Button>
           </DialogFooter>

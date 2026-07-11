@@ -45,6 +45,15 @@ vi.mock("./lib/supabase", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+Object.defineProperty(window, "requestAnimationFrame", {
+  configurable: true,
+  value: (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  },
+});
+HTMLElement.prototype.scrollIntoView = vi.fn();
+
 const renderApp = async () => {
   const element = document.createElement("div");
   document.body.appendChild(element);
@@ -107,6 +116,11 @@ describe("App", () => {
 
     expect(element.textContent).toContain("今日固定赛");
     expect(element.textContent).toContain("2/10 题");
+    expect(
+      element
+        .querySelector('[role="progressbar"][aria-label="今日赛完成进度"]')
+        ?.getAttribute("aria-valuenow"),
+    ).toBe("20");
 
     await clickButton(element, "练习");
 
@@ -117,6 +131,55 @@ describe("App", () => {
 
     expect(element.textContent).toContain("今日固定赛");
     expect(element.textContent).toContain("2/10 题");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("enters practice without skipping the first puzzle and labels later skips clearly", async () => {
+    const { element, root } = await renderApp();
+    await flushEffects();
+
+    await clickButton(element, "练习");
+
+    expect(element.textContent).toContain("第 1 题");
+    expect(element.textContent).toContain("1  ·  3  ·  4  ·  6");
+    expect(element.textContent).toContain("换一题");
+
+    await clickButton(element, "换一题");
+
+    expect(element.textContent).toContain("第 2 题");
+    expect(element.textContent).toContain("2  ·  3  ·  8  ·  8");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("shows staged guidance and readable equations", async () => {
+    const { element, root } = await renderApp();
+    await flushEffects();
+    await clickButton(element, "练习");
+
+    expect(element.textContent).toContain("先选择第一个数字。");
+
+    const clickByAriaLabel = async (label: string) => {
+      const button = element.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(button, `button labelled "${label}"`).toBeTruthy();
+      await act(async () => {
+        button?.click();
+      });
+    };
+
+    await clickByAriaLabel("数字 3，第 2 张，算式 3");
+    expect(element.textContent).toContain("现在选择运算符");
+
+    await clickButton(element, "÷");
+    expect(element.textContent).toContain("现在选择第二个数字");
+
+    await clickByAriaLabel("数字 4，第 3 张，算式 4");
+    expect(element.textContent).toContain("3 ÷ 4 = 3/4");
 
     await act(async () => {
       root.unmount();
@@ -141,6 +204,33 @@ describe("App", () => {
     expect(supabaseMocks.restartDailyRun).toHaveBeenCalledTimes(1);
     expect(element.textContent).toContain("0/10 题");
     expect(element.textContent).toContain("正式赛已重新开始。");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("closes the finish dialog and focuses the leaderboard", async () => {
+    supabaseMocks.resumeDailyRun.mockResolvedValue({
+      ...createRun(10),
+      completed_at: "2026-07-01T00:05:00.000Z",
+      score_ms: 300_000,
+    });
+    const { element, root } = await renderApp();
+    await flushEffects();
+
+    expect(document.body.textContent).toContain("今日赛完成");
+
+    await clickButton(document.body, "查看榜单");
+
+    const leaderboard = element.querySelector<HTMLElement>(
+      'aside[aria-labelledby="leaderboard-heading"]',
+    );
+    expect(document.body.textContent).not.toContain("今日赛完成");
+    expect(leaderboard?.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "start",
+    });
 
     await act(async () => {
       root.unmount();
